@@ -57,6 +57,7 @@ from pandas import DateOffset
 from sqlalchemy import and_, Column, or_, UniqueConstraint
 from sqlalchemy.exc import MultipleResultsFound
 from sqlalchemy.ext.declarative import declared_attr
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapper, validates
 from sqlalchemy.sql.elements import ColumnElement, Grouping, literal_column, TextClause
 from sqlalchemy.sql.expression import Label, Select, TextAsFrom
@@ -749,6 +750,49 @@ class CertificationMixin:
     @property
     def warning_markdown(self) -> Optional[str]:
         return self.get_extra_dict().get("warning_markdown")
+
+
+class SoftDeleteMixin:
+    """Mixin that adds a ``deleted_at`` timestamp column for soft deletes.
+
+    Models including this mixin gain a nullable, indexed ``deleted_at`` column
+    along with ``soft_delete()`` / ``restore()`` instance methods, an
+    ``is_deleted`` hybrid property, and a ``not_deleted()`` class-level filter
+    helper.
+
+    This is the bounded first increment of the soft-delete SIP. The global ORM
+    ``do_orm_execute`` filter, DAO routing, restore commands, and API surface
+    changes are intentionally deferred to follow-up PRs so that the schema and
+    mixin contract can land independently.
+    """
+
+    deleted_at = sa.Column(sa.DateTime, nullable=True, index=True)
+
+    @hybrid_property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
+
+    @is_deleted.expression  # type: ignore[no-redef]
+    def is_deleted(cls) -> ColumnElement[bool]:  # noqa: N805  pylint: disable=no-self-argument
+        return cls.deleted_at.isnot(None)
+
+    @classmethod
+    def not_deleted(cls) -> ColumnElement[bool]:
+        """Return a SQL expression matching rows that are not soft-deleted."""
+        return cls.deleted_at.is_(None)
+
+    def soft_delete(self, deleted_at: Optional[datetime] = None) -> None:
+        """Mark this row as soft-deleted by setting ``deleted_at``.
+
+        No-op if the row is already soft-deleted so callers can invoke this
+        idempotently from bulk delete paths.
+        """
+        if self.deleted_at is None:
+            self.deleted_at = deleted_at or datetime.now()
+
+    def restore(self) -> None:
+        """Clear the ``deleted_at`` timestamp, restoring the row."""
+        self.deleted_at = None
 
 
 def clone_model(
