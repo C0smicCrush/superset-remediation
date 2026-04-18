@@ -137,3 +137,26 @@ def test_get_virtual_table_metadata_multiple(mocker: MockerFixture) -> None:
     with pytest.raises(SupersetSecurityException) as excinfo:
         get_virtual_table_metadata(dataset)
     assert str(excinfo.value) == "Only single queries supported"
+
+
+def test_get_virtual_table_metadata_jinja_noop_processor(
+    mocker: MockerFixture,
+) -> None:
+    """
+    Test that a virtual dataset with Jinja macros is accepted even when the
+    database-level template processor is a no-op (i.e. when the
+    `ENABLE_TEMPLATE_PROCESSING` feature flag is disabled). This regression
+    guards against raising an "Invalid SQL" error at save time for SQL that
+    the user can legitimately template with Jinja at runtime.
+    """
+    mocker.patch(
+        "superset.connectors.sqla.utils.get_columns_description",
+        return_value=[{"name": "x", "type": "INTEGER"}],
+    )
+    jinja_sql = "SELECT 1 AS x {% if from_dttm %} WHERE 1=1 {% endif %}"
+    dataset = mocker.MagicMock(sql=jinja_sql)
+    dataset.database.db_engine_spec.engine = "postgresql"
+    # Simulate the NoOp template processor leaving Jinja syntax in the SQL.
+    dataset.get_template_processor().process_template.return_value = jinja_sql
+
+    assert get_virtual_table_metadata(dataset) == [{"name": "x", "type": "INTEGER"}]

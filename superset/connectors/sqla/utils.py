@@ -23,6 +23,7 @@ from typing import Callable, TYPE_CHECKING, TypeVar
 from uuid import UUID
 
 from flask_babel import lazy_gettext as _
+from jinja2.exceptions import TemplateError
 from sqlalchemy.engine.url import URL as SqlaURL  # noqa: N811
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.ext.declarative import DeclarativeMeta
@@ -40,11 +41,21 @@ from superset.exceptions import (
 )
 from superset.models.core import Database
 from superset.result_set import SupersetResultSet
-from superset.sql.parse import SQLScript, Table
+from superset.sql.parse import process_jinja_sql, SQLScript, Table
 from superset.superset_typing import ResultSetColumnType
 
 if TYPE_CHECKING:
     from superset.connectors.sqla.models import SqlaTable
+
+# Jinja block/expression/comment delimiters. If any of these remain in the SQL
+# after calling the database-level template processor, the sql still contains
+# unrendered Jinja syntax and cannot be parsed as raw SQL.
+_JINJA_MARKERS: tuple[str, ...] = ("{%", "{{", "{#")
+
+
+def _contains_jinja_syntax(sql: str) -> bool:
+    """Return True if the SQL string still contains Jinja template markers."""
+    return any(marker in sql for marker in _JINJA_MARKERS)
 
 
 def get_physical_table_metadata(
@@ -112,12 +123,38 @@ def get_virtual_table_metadata(dataset: SqlaTable) -> list[ResultSetColumnType]:
         raise SupersetGenericDBErrorException(
             message=_("Template processing error: %(error)s", error=str(ex)),
         ) from ex
-    try:
-        parsed_script = SQLScript(sql, engine=db_engine_spec.engine)
-    except SupersetParseError as ex:
-        raise SupersetGenericDBErrorException(
-            message=_("Invalid SQL: %(error)s", error=ex.error.message),
-        ) from ex
+
+    # Virtual datasets can legitimately contain Jinja macros (e.g., the
+    # documented `{% if from_dttm %}` pattern). When ENABLE_TEMPLATE_PROCESSING
+    # is disabled the database-level template processor is a no-op and leaves
+    # Jinja syntax in the SQL, which then fails the raw SQL parse below with
+    # an "Invalid SQL" error at save time. Fall back to process_jinja_sql,
+    # which renders Jinja using the sandboxed environment (and swaps
+    # non-SQL-safe macros for NULL) so the resulting statement is parsable.
+    if _contains_jinja_syntax(sql):
+        try:
+            jinja_result = process_jinja_sql(
+                dataset.sql,
+                dataset.database,
+                dataset.template_params_dict,
+            )
+        except TemplateError as ex:
+            raise SupersetGenericDBErrorException(
+                message=_("Template processing error: %(error)s", error=str(ex)),
+            ) from ex
+        except SupersetParseError as ex:
+            raise SupersetGenericDBErrorException(
+                message=_("Invalid SQL: %(error)s", error=ex.error.message),
+            ) from ex
+        parsed_script = jinja_result.script
+        sql = parsed_script.format()
+    else:
+        try:
+            parsed_script = SQLScript(sql, engine=db_engine_spec.engine)
+        except SupersetParseError as ex:
+            raise SupersetGenericDBErrorException(
+                message=_("Invalid SQL: %(error)s", error=ex.error.message),
+            ) from ex
     if parsed_script.has_mutation():
         raise SupersetSecurityException(
             SupersetError(
