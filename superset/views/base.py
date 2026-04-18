@@ -494,7 +494,9 @@ def cached_common_bootstrap_data(  # pylint: disable=unused-argument
             "AUTH_USER_REGISTRATION_ROLE"
         ]
     if should_show_recaptcha:
-        frontend_config["RECAPTCHA_PUBLIC_KEY"] = app.config["RECAPTCHA_PUBLIC_KEY"]
+        frontend_config["RECAPTCHA_PUBLIC_KEY"] = app.config.get(
+            "RECAPTCHA_PUBLIC_KEY", ""
+        )
 
     frontend_config["AUTH_TYPE"] = auth_type
     if auth_type == AUTH_OAUTH:
