@@ -487,6 +487,15 @@ const FilterBar: FC<FiltersBarProps> = ({
   ]);
 
   const handleClearAll = useCallback(() => {
+    // Clearing filters is an applied-state transition, so mirror handleApply's
+    // logging + update-key bump. Without this the cleared data mask is not
+    // reflected in the dashboard URL state and downstream listeners do not
+    // see the transition as an explicit apply, which is what the bug report
+    // "Clear All resets controls but does not apply until Apply Filters"
+    // describes.
+    dispatch(logEvent(LOG_ACTIONS_CHANGE_DASHBOARD_FILTER, {}));
+    setUpdateKey(prev => prev + 1);
+
     const newClearAllTriggers = { ...clearAllTriggers };
 
     nativeFilterValues.forEach(filter => {
@@ -505,9 +514,14 @@ const FilterBar: FC<FiltersBarProps> = ({
       if (dataMaskSelected[id]) {
         dispatch(updateDataMask(id, clearedDataMask));
         setDataMaskSelected(draft => {
-          if (draft[id].filterState?.value !== undefined) {
-            draft[id].filterState!.value = clearedValue;
-          }
+          // Always reset the filter value to the cleared state so the UI
+          // and applied redux state stay in sync even if the current draft
+          // value was already undefined (e.g. a filter that was just cleared
+          // individually).
+          draft[id].filterState = {
+            ...draft[id].filterState,
+            value: clearedValue,
+          };
           draft[id].extraFormData = {};
         });
         newClearAllTriggers[id] = true;

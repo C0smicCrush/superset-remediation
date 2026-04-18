@@ -38,6 +38,8 @@ import { FILTER_BAR_TEST_ID } from './utils';
 import FilterBar from '.';
 import { FILTERS_CONFIG_MODAL_TEST_ID } from '../FiltersConfigModal/FiltersConfigModal';
 import * as dataMaskActions from 'src/dataMask/actions';
+import * as loggerActions from 'src/logger/actions';
+import { LOG_ACTIONS_CHANGE_DASHBOARD_FILTER } from 'src/logger/LogUtils';
 
 jest.useFakeTimers();
 
@@ -804,4 +806,60 @@ test('FilterBar Clear All only clears in-scope filters, not out-of-scope ones', 
   });
 
   updateDataMaskSpy.mockRestore();
+});
+
+test('FilterBar Clear All logs a dashboard filter change event so the cleared state is applied without a separate Apply click', async () => {
+  const filterId = 'NATIVE_FILTER-clear-applies';
+  const logEventSpy = jest.spyOn(loggerActions, 'logEvent');
+  const selectFilter = createFilter({
+    id: filterId,
+    name: 'Region',
+    filterType: 'filter_select',
+    targets: [{ datasetId: 7, column: { name: 'region' } }],
+    defaultDataMask: { filterState: { value: null }, extraFormData: {} },
+    chartsInScope: [18],
+  });
+  const stateWithSelect = {
+    ...stateWithoutNativeFilters,
+    dashboardInfo: {
+      id: 1,
+      dash_edit_perm: true,
+      filterBarOrientation: FilterBarOrientation.Vertical,
+      metadata: {
+        native_filter_configuration: [selectFilter],
+        chart_configuration: {},
+      },
+    },
+    dashboardState: {
+      ...stateWithoutNativeFilters.dashboardState,
+      activeTabs: ['ROOT_ID'],
+    },
+    dataMask: {
+      [filterId]: createDataMask(filterId, ['East']),
+    },
+    nativeFilters: {
+      filters: { [filterId]: selectFilter },
+      filtersState: {},
+    },
+  };
+
+  const props = createOpenedBarProps();
+  renderFilterBar(props, stateWithSelect);
+  await act(async () => {
+    jest.advanceTimersByTime(300);
+  });
+
+  const clearBtn = screen.getByTestId(getTestId('clear-button'));
+  await act(async () => {
+    userEvent.click(clearBtn);
+  });
+
+  // The change-dashboard-filter log event is what handleApply dispatches to
+  // mark a filter change as applied. Clear All must do the same so charts
+  // refresh without requiring a second Apply Filters click (issue #89).
+  expect(logEventSpy).toHaveBeenCalledWith(
+    LOG_ACTIONS_CHANGE_DASHBOARD_FILTER,
+    expect.any(Object),
+  );
+  logEventSpy.mockRestore();
 });
