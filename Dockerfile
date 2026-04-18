@@ -221,6 +221,14 @@ EXPOSE ${SUPERSET_PORT}
 ######################################################################
 FROM python-common AS lean
 
+# service-worker.js is emitted by webpack one directory above assets/
+# (see superset-frontend/webpack.config.js) and must be served from
+# /static/service-worker.js for ServiceWorker registration to succeed.
+# Scoped to the lean stage (and its derivatives ci/showtime) so dev
+# builds with DEV_MODE=true, which skip the webpack build entirely,
+# are not broken by a missing-file COPY.
+COPY --from=superset-node /app/superset/static/service-worker.js superset/static/service-worker.js
+
 # Install Python dependencies using docker/pip-install.sh
 COPY requirements/base.txt requirements/
 
