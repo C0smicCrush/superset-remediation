@@ -17,12 +17,27 @@
  * under the License.
  */
 import { utils, writeFile } from 'xlsx';
+import { t } from '@apache-superset/core/translation';
+import { addWarningToast } from 'src/components/MessageToasts/actions';
 
 export default function exportPivotExcel(
   tableSelector: string,
   fileName: string,
 ) {
   const table = document.querySelector(tableSelector);
-  const workbook = utils.table_to_book(table);
-  writeFile(workbook, `${fileName}.xlsx`);
+  if (!table) {
+    addWarningToast(
+      t('Pivot table export failed: the table is not available yet.'),
+    );
+    return;
+  }
+  try {
+    const workbook = utils.table_to_book(table);
+    writeFile(workbook, `${fileName}.xlsx`);
+  } catch (error) {
+    console.error('Pivot table Excel export failed', error);
+    addWarningToast(
+      t('Pivot table export failed, please refresh and try again.'),
+    );
+  }
 }
