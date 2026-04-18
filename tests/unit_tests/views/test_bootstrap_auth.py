@@ -133,3 +133,29 @@ def test_recaptcha_shown_for_non_federated_auth(
     payload = _get_bootstrap()
 
     assert payload["conf"]["RECAPTCHA_PUBLIC_KEY"] == "test-key"
+
+
+@pytest.mark.parametrize(
+    "auth_type",
+    [AUTH_DB, AUTH_LDAP],
+)
+def test_recaptcha_missing_key_does_not_crash(
+    app_context: None,
+    auth_type: int,
+) -> None:
+    """Bootstrap must not raise KeyError when RECAPTCHA_PUBLIC_KEY is unset.
+
+    Regression test for a crash on /, /superset/welcome/, and /login/ when
+    AUTH_USER_REGISTRATION is enabled with AUTH_DB or AUTH_LDAP and
+    RECAPTCHA_PUBLIC_KEY is left undefined.
+    """
+    from flask import current_app
+
+    current_app.config["AUTH_TYPE"] = auth_type
+    current_app.config["AUTH_USER_REGISTRATION"] = True
+    current_app.config["AUTH_USER_REGISTRATION_ROLE"] = "Public"
+    current_app.config.pop("RECAPTCHA_PUBLIC_KEY", None)
+
+    payload = _get_bootstrap()
+
+    assert payload["conf"]["RECAPTCHA_PUBLIC_KEY"] == ""
