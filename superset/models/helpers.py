@@ -57,6 +57,7 @@ from pandas import DateOffset
 from sqlalchemy import and_, Column, or_, UniqueConstraint
 from sqlalchemy.exc import MultipleResultsFound
 from sqlalchemy.ext.declarative import declared_attr
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapper, validates
 from sqlalchemy.sql.elements import ColumnElement, Grouping, literal_column, TextClause
 from sqlalchemy.sql.expression import Label, Select, TextAsFrom
@@ -556,6 +557,54 @@ def _user(user: User) -> str:
     if not user:
         return ""
     return escape(user)
+
+
+class SoftDeleteMixin:
+    """Mixin that adds soft-delete support to a model.
+
+    Adds a nullable, indexed ``deleted_at`` timestamp column and helpers to
+    mark a row as soft-deleted or restore it. A row is considered deleted when
+    ``deleted_at`` is not ``NULL``.
+
+    This first increment only introduces the column, index, and instance-level
+    helpers. Global ORM filtering, DAO routing, and restore endpoints are not
+    wired up here and will be added in follow-up work.
+    """
+
+    deleted_at = sa.Column(sa.DateTime, nullable=True, index=True)
+
+    @hybrid_property
+    def is_deleted(self) -> bool:
+        """Return ``True`` if the row has been soft-deleted."""
+
+        return self.deleted_at is not None
+
+    @is_deleted.expression  # type: ignore[no-redef]
+    def is_deleted(cls) -> ColumnElement[bool]:  # noqa: N805
+        """SQL expression form of ``is_deleted`` for use in queries."""
+
+        return cls.deleted_at.isnot(None)
+
+    @classmethod
+    def not_deleted(cls) -> ColumnElement[bool]:
+        """Filter expression selecting only rows that are not soft-deleted."""
+
+        return cls.deleted_at.is_(None)
+
+    def soft_delete(self, deleted_at: Optional[datetime] = None) -> None:
+        """Mark the row as soft-deleted by setting ``deleted_at``.
+
+        :param deleted_at: Optional explicit timestamp. Defaults to the current
+            time. No-op if the row is already soft-deleted.
+        """
+
+        if self.deleted_at is None:
+            self.deleted_at = deleted_at or datetime.now()
+
+    def restore(self) -> None:
+        """Restore a soft-deleted row by clearing ``deleted_at``."""
+
+        self.deleted_at = None
 
 
 class AuditMixinNullable(AuditMixin):
