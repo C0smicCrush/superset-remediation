@@ -26,16 +26,15 @@ from datetime import datetime, timedelta
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.orm import DeclarativeBase, Session
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import Session
 
 from superset.models.helpers import SoftDeleteMixin
 
-
-class Base(DeclarativeBase):
-    pass
+Base = declarative_base()
 
 
-class _ExampleModel(Base, SoftDeleteMixin):
+class _ExampleModel(Base, SoftDeleteMixin):  # type: ignore[misc, valid-type]
     __tablename__ = "soft_delete_example"
 
     id = sa.Column(sa.Integer, primary_key=True)
