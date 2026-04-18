@@ -58,6 +58,37 @@ class TestSubdirectoryDeployments(SupersetTestCase):
         assert called_environ["SCRIPT_NAME"] == "/superset"
         assert result == [b"response"]
 
+    def test_app_root_middleware_passes_static_assets_through(self):
+        """Requests for ``/static/*`` bypass app-root stripping.
+
+        Webpack compiles asset paths with a hardcoded ``/static/assets/``
+        publicPath that does not include the app root prefix, so those
+        requests must reach the WSGI app even when deployed under a
+        subdirectory.
+        """
+        mock_app = MagicMock()
+        mock_app.return_value = [b"static-asset"]
+
+        middleware = AppRootMiddleware(mock_app, "/dashboards")
+
+        environ = EnvironBuilder(
+            "/static/assets/images/superset-logo-horiz.png"
+        ).get_environ()
+        start_response = MagicMock()
+
+        result = list(middleware(environ, start_response))
+
+        # The wrapped app should be called without stripping the app root
+        # (there's nothing to strip) and without SCRIPT_NAME being set.
+        mock_app.assert_called_once()
+        called_environ = mock_app.call_args[0][0]
+        assert (
+            called_environ["PATH_INFO"]
+            == "/static/assets/images/superset-logo-horiz.png"
+        )
+        assert called_environ.get("SCRIPT_NAME", "") == ""
+        assert result == [b"static-asset"]
+
     def test_app_root_middleware_wrong_path_returns_404(self):
         """Test middleware returns 404 for incorrect paths."""
         # Create a mock WSGI app
