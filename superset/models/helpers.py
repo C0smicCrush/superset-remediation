@@ -257,6 +257,50 @@ class UUIDMixin:  # pylint: disable=too-few-public-methods
         return str(self.uuid)[:8]
 
 
+class SoftDeleteMixin:  # pylint: disable=too-few-public-methods
+    """Adds a nullable, indexed ``deleted_at`` column and soft-delete helpers.
+
+    This mixin is intentionally additive: attaching it to a model only adds a
+    column and instance helpers. It does NOT, by itself, hide soft-deleted rows
+    from queries, and it does NOT route DAO deletes through :meth:`soft_delete`.
+
+    DAO routing, the global ``do_orm_execute`` visibility filter, restore
+    endpoints, and the ``include_deleted`` list parameter are intentionally out
+    of scope for this mixin and are tracked as follow-ups to the SIP proposing
+    soft-delete for charts, dashboards, and datasets.
+    """
+
+    deleted_at = sa.Column(sa.DateTime, nullable=True, index=True)
+
+    def soft_delete(self, when: Optional[datetime] = None) -> None:
+        """Mark this row as soft-deleted by setting ``deleted_at``.
+
+        Calling ``soft_delete`` on a row that is already soft-deleted leaves the
+        existing ``deleted_at`` timestamp unchanged.
+        """
+        if self.deleted_at is None:
+            self.deleted_at = when if when is not None else datetime.utcnow()
+
+    def restore(self) -> None:
+        """Clear ``deleted_at``, restoring a soft-deleted row to visibility."""
+        self.deleted_at = None
+
+    @property
+    def is_deleted(self) -> bool:
+        """Whether this row is soft-deleted."""
+        return self.deleted_at is not None
+
+    @classmethod
+    def not_deleted(cls) -> ColumnElement[bool]:
+        """SQL filter expression matching rows that are not soft-deleted.
+
+        Usage::
+
+            session.query(Model).filter(Model.not_deleted())
+        """
+        return cls.deleted_at.is_(None)
+
+
 class ImportExportMixin(UUIDMixin):
     export_parent: Optional[str] = None
     # The name of the attribute
