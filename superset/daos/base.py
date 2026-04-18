@@ -48,6 +48,7 @@ from superset.daos.exceptions import (
     DAOFindFailedError,
 )
 from superset.extensions import db
+from superset.models.helpers import SoftDeleteMixin
 
 T = TypeVar("T", bound=CoreModel)
 
@@ -433,6 +434,11 @@ class BaseDAO(CoreBaseDAO[T], Generic[T]):
         """
         Delete the specified items including their associated relationships.
 
+        Models that include :class:`SoftDeleteMixin` are soft-deleted by setting
+        ``deleted_at``; all other models fall through to :meth:`hard_delete`. This
+        branching at the DAO layer means existing delete commands (single and
+        bulk) gain soft-delete behaviour without per-command changes.
+
         Note that bulk deletion via `delete` is not invoked in the base class as this
         does not dispatch the ORM `after_delete` event which may be required to augment
         additional records loosely defined via implicit relationships. Instead ORM
@@ -443,6 +449,34 @@ class BaseDAO(CoreBaseDAO[T], Generic[T]):
 
         :param items: The items to delete
         :see: https://docs.sqlalchemy.org/en/latest/orm/queryguide/dml.html
+        """
+
+        soft_delete_items: list[T] = []
+        hard_delete_items: list[T] = []
+        for item in items:
+            if isinstance(item, SoftDeleteMixin):
+                soft_delete_items.append(item)
+            else:
+                hard_delete_items.append(item)
+
+        for item in soft_delete_items:
+            item.soft_delete()
+
+        if hard_delete_items:
+            cls.hard_delete(hard_delete_items)
+
+    @classmethod
+    def hard_delete(cls, items: list[T]) -> None:
+        """
+        Permanently remove the specified items via ``Session.delete``.
+
+        This is the original :meth:`delete` behaviour and is used directly for
+        models without :class:`SoftDeleteMixin`. Callers that need to bypass
+        soft-delete routing for a soft-delete-enabled model (for example the
+        import pipeline when cleaning up a stale soft-deleted row) can invoke
+        this explicitly.
+
+        :param items: The items to hard-delete
         """
 
         for item in items:
