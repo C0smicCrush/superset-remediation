@@ -17,12 +17,20 @@
  * under the License.
  */
 import { utils, writeFile } from 'xlsx';
+import { t } from '@apache-superset/core/translation';
+import { addWarningToast } from 'src/components/MessageToasts/actions';
 
 export default function exportPivotExcel(
   tableSelector: string,
   fileName: string,
 ) {
   const table = document.querySelector(tableSelector);
+  if (!(table instanceof HTMLTableElement)) {
+    addWarningToast(
+      t('Unable to export pivot table: the table is not ready yet.'),
+    );
+    return;
+  }
   const workbook = utils.table_to_book(table);
   writeFile(workbook, `${fileName}.xlsx`);
 }
