@@ -611,6 +611,7 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
         self.configure_ssh_manager()
         self.configure_stats_manager()
         self.configure_task_manager()
+        self.configure_soft_delete_filter()
 
         # Hook that provides administrators a handle on the Flask APP
         # after initialization
@@ -789,6 +790,19 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
 
     def configure_stats_manager(self) -> None:
         stats_logger_manager.init_app(self.superset_app)
+
+    def configure_soft_delete_filter(self) -> None:
+        """Register the global soft-delete ORM visibility filter.
+
+        Automatically appends ``WHERE deleted_at IS NULL`` to every ORM SELECT
+        targeting a model that mixes in
+        :class:`~superset.models.helpers.SoftDeleteMixin`.
+        """
+
+        # pylint: disable=import-outside-toplevel
+        from superset.models.soft_delete import register_soft_delete_listener
+
+        register_soft_delete_listener(db.session)
 
     def setup_event_logger(self) -> None:
         _event_logger["event_logger"] = get_event_logger_from_cfg_value(

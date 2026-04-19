@@ -19,7 +19,7 @@ import functools
 import logging
 from datetime import datetime
 from io import BytesIO
-from typing import Any, Callable, cast
+from typing import Any, Callable, cast, Optional
 from zipfile import is_zipfile, ZipFile
 
 import prison
@@ -33,6 +33,7 @@ from flask_appbuilder.const import (
     API_LIST_TITLE_RIS_KEY,
     API_ORDER_COLUMNS_RIS_KEY,
 )
+from flask_appbuilder.hooks import before_request
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_babel import gettext, ngettext
 from marshmallow import ValidationError
@@ -57,7 +58,9 @@ from superset.commands.dashboard.exceptions import (
     DashboardForbiddenError,
     DashboardInvalidError,
     DashboardNativeFiltersUpdateFailedError,
+    DashboardNotDeletedError,
     DashboardNotFoundError,
+    DashboardRestoreFailedError,
     DashboardUpdateFailedError,
 )
 from superset.commands.dashboard.export import ExportDashboardsCommand
@@ -65,6 +68,7 @@ from superset.commands.dashboard.export_example import ExportExampleCommand
 from superset.commands.dashboard.fave import AddFavoriteDashboardCommand
 from superset.commands.dashboard.importers.dispatcher import ImportDashboardsCommand
 from superset.commands.dashboard.permalink.create import CreateDashboardPermalinkCommand
+from superset.commands.dashboard.restore import RestoreDashboardCommand
 from superset.commands.dashboard.unfave import DelFavoriteDashboardCommand
 from superset.commands.dashboard.update import (
     UpdateDashboardChartCustomizationsCommand,
@@ -229,6 +233,7 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
         RouteMethod.IMPORT,
         RouteMethod.RELATED,
         "bulk_delete",  # not using RouteMethod since locally defined
+        "restore",
         "favorite_status",
         "add_favorite",
         "remove_favorite",
@@ -264,6 +269,18 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
             custom_columns=CUSTOM_TAG_LIST_COLUMNS,
         )
         super().__init__()
+
+    @before_request(only=["get_list"])
+    def handle_include_deleted(self) -> Optional[Response]:
+        """Honor ``?include_deleted=true`` on the list endpoint.
+
+        The flag is consumed by the global soft-delete ORM filter
+        (see :mod:`superset.models.soft_delete`).
+        """
+
+        value = request.args.get("include_deleted", "").lower()
+        g.skip_soft_delete_filter = value in {"1", "true", "yes"}
+        return None
 
     @expose("/", methods=("GET",))
     @protect()
@@ -1186,6 +1203,63 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
         except DashboardForbiddenError:
             return self.response_403()
         except DashboardDeleteFailedError as ex:
+            return self.response_422(message=str(ex))
+
+    @expose("/<pk>/restore", methods=("POST",))
+    @protect()
+    @safe
+    @statsd_metrics
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.restore",
+        log_to_statsd=False,
+    )
+    def restore(self, pk: int) -> Response:
+        """Restore a soft-deleted dashboard.
+        ---
+        post:
+          summary: Restore a soft-deleted dashboard
+          parameters:
+          - in: path
+            schema:
+              type: integer
+            name: pk
+          responses:
+            200:
+              description: Dashboard restored
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+            401:
+              $ref: '#/components/responses/401'
+            403:
+              $ref: '#/components/responses/403'
+            404:
+              $ref: '#/components/responses/404'
+            422:
+              $ref: '#/components/responses/422'
+            500:
+              $ref: '#/components/responses/500'
+        """
+        try:
+            RestoreDashboardCommand(pk).run()
+            return self.response(200, message="OK")
+        except DashboardNotFoundError:
+            return self.response_404()
+        except DashboardNotDeletedError as ex:
+            return self.response_422(message=str(ex))
+        except DashboardForbiddenError:
+            return self.response_403()
+        except DashboardRestoreFailedError as ex:
+            logger.error(
+                "Error restoring model %s: %s",
+                self.__class__.__name__,
+                str(ex),
+                exc_info=True,
+            )
             return self.response_422(message=str(ex))
 
     @expose("/export/", methods=("GET",))

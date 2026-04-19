@@ -20,6 +20,7 @@ from flask_babel import lazy_gettext as _
 from marshmallow.validate import ValidationError
 
 from superset.commands.exceptions import (
+    CommandException,
     CommandInvalidError,
     CreateFailedError,
     DeleteFailedError,
@@ -80,6 +81,14 @@ class DashboardDeleteEmbeddedFailedError(DeleteFailedError):
 
 class DashboardDeleteFailedReportsExistError(DashboardDeleteFailedError):
     message = _("There are associated alerts or reports")
+
+
+class DashboardRestoreFailedError(CommandException):
+    message = _("Dashboard could not be restored.")
+
+
+class DashboardNotDeletedError(CommandException):
+    message = _("Dashboard is not deleted.")
 
 
 class DashboardForbiddenError(ForbiddenError):

@@ -21,6 +21,7 @@ import uuid as uuid_lib
 from enum import Enum
 from typing import (
     Any,
+    cast as typing_cast,
     ClassVar,
     Dict,
     Generic,
@@ -433,20 +434,51 @@ class BaseDAO(CoreBaseDAO[T], Generic[T]):
         """
         Delete the specified items including their associated relationships.
 
-        Note that bulk deletion via `delete` is not invoked in the base class as this
-        does not dispatch the ORM `after_delete` event which may be required to augment
-        additional records loosely defined via implicit relationships. Instead ORM
-        objects are deleted one-by-one via `Session.delete`.
+        For models that mix in :class:`~superset.models.helpers.SoftDeleteMixin`,
+        deletion is routed through ``soft_delete()`` which sets ``deleted_at``
+        instead of removing the row. All other models are hard-deleted one-by-one
+        via ``Session.delete``. The routing happens at the DAO layer because
+        ``Session.delete`` marks the object for hard deletion immediately at the
+        ORM level and has no per-model hook that can redirect to an UPDATE.
 
-        Subclasses may invoke bulk deletion but are responsible for instrumenting any
-        post-deletion logic.
+        Subclasses may invoke bulk deletion but are responsible for instrumenting
+        any post-deletion logic.
 
         :param items: The items to delete
         :see: https://docs.sqlalchemy.org/en/latest/orm/queryguide/dml.html
         """
 
+        from superset.models.helpers import SoftDeleteMixin  # noqa: PLC0415
+
         for item in items:
-            db.session.delete(item)
+            if isinstance(item, SoftDeleteMixin):
+                cls.soft_delete(typing_cast(T, item))
+            else:
+                cls.hard_delete(item)
+
+    @classmethod
+    def hard_delete(cls, item: T) -> None:
+        """Permanently remove a single item via ``Session.delete``."""
+
+        db.session.delete(item)
+
+    @classmethod
+    def soft_delete(cls, item: T) -> None:
+        """Mark a soft-delete-enabled item as deleted by setting ``deleted_at``.
+
+        Subclasses may override this to perform related cleanup (e.g. removing
+        association-table rows) before the row is marked deleted.
+        """
+
+        item.soft_delete()  # type: ignore[attr-defined]
+        db.session.add(item)
+
+    @classmethod
+    def restore(cls, item: T) -> None:
+        """Clear ``deleted_at`` on a soft-deleted item, making it active again."""
+
+        item.restore()  # type: ignore[attr-defined]
+        db.session.add(item)
 
     @classmethod
     def query(cls, query: Query) -> list[T]:

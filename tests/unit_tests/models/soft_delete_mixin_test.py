@@ -25,16 +25,15 @@ Also verifies that the mixin has been wired into ``Slice``, ``Dashboard`` and
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.orm import DeclarativeBase, Session
+from sqlalchemy.orm import declarative_base, Session
 
 from superset.models.helpers import SoftDeleteMixin
 
-
-class Base(DeclarativeBase):
-    pass
+Base: Any = declarative_base()
 
 
 class _SoftDeletable(SoftDeleteMixin, Base):
