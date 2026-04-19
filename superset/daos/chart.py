@@ -49,6 +49,26 @@ class ChartDAO(BaseDAO[Slice]):
         filterable.update(CHART_CUSTOM_FIELDS)
         return filterable
 
+    @classmethod
+    def soft_delete(cls, item: Slice) -> None:
+        """Soft-delete a chart and hard-delete its ``dashboard_slices`` rows.
+
+        The association rows are removed so that dashboard layouts do not
+        continue to reference a chart that has been deleted from the user's
+        perspective. Restoring the chart does not re-attach it to its former
+        dashboards.
+        """
+
+        # Import locally to avoid a circular import with ``superset.models``.
+        from superset.models.dashboard import (  # noqa: PLC0415
+            dashboard_slices,
+        )
+
+        db.session.execute(
+            dashboard_slices.delete().where(dashboard_slices.c.slice_id == item.id)
+        )
+        super().soft_delete(item)
+
     @staticmethod
     def get_by_id_or_uuid(id_or_uuid: str) -> Slice:
         query = db.session.query(Slice).filter(id_or_uuid_filter(id_or_uuid))

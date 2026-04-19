@@ -174,6 +174,14 @@ class DatasetDeleteFailedError(DeleteFailedError):
     message = _("Datasets could not be deleted.")
 
 
+class DatasetRestoreFailedError(CommandException):
+    message = _("Dataset could not be restored.")
+
+
+class DatasetNotDeletedError(CommandException):
+    message = _("Dataset is not deleted.")
+
+
 class DatasetRefreshFailedError(UpdateFailedError):
     message = _("Dataset could not be updated.")
 

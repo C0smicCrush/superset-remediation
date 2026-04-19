@@ -49,7 +49,18 @@ def import_chart(
     ignore_permissions: bool = False,
 ) -> Slice:
     can_write = ignore_permissions or security_manager.can_access("can_write", "Chart")
-    existing = db.session.query(Slice).filter_by(uuid=config["uuid"]).first()
+    # Look up the existing chart including any soft-deleted row so re-importing
+    # a previously soft-deleted UUID does not hit a unique-constraint violation.
+    existing = (
+        db.session.query(Slice)
+        .execution_options(skip_visibility_filter=True)
+        .filter_by(uuid=config["uuid"])
+        .first()
+    )
+    if existing is not None and existing.is_deleted:
+        db.session.delete(existing)
+        db.session.flush()
+        existing = None
     user = get_user()
     if existing:
         if overwrite and can_write and user:

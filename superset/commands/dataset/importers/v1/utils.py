@@ -112,7 +112,19 @@ def import_dataset(  # noqa: C901
         "can_write",
         "Dataset",
     )
-    existing = db.session.query(SqlaTable).filter_by(uuid=config["uuid"]).first()
+    # Look up the existing dataset including any soft-deleted row so
+    # re-importing a previously soft-deleted UUID does not hit a
+    # unique-constraint violation.
+    existing = (
+        db.session.query(SqlaTable)
+        .execution_options(skip_visibility_filter=True)
+        .filter_by(uuid=config["uuid"])
+        .first()
+    )
+    if existing is not None and existing.is_deleted:
+        db.session.delete(existing)
+        db.session.flush()
+        existing = None
     user = get_user()
     if existing:
         if overwrite and can_write and user:
