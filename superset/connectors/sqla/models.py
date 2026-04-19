@@ -100,7 +100,6 @@ from superset.models.helpers import (
     ExploreMixin,
     ImportExportMixin,
     QueryResult,
-    SoftDeleteMixin,
     SQLA_QUERY_KEYS,
 )
 from superset.models.slice import Slice
@@ -1200,7 +1199,6 @@ class SqlaTable(
     CoreDataset,
     BaseDatasource,
     ExploreMixin,
-    SoftDeleteMixin,
 ):  # pylint: disable=too-many-public-methods
     """An ORM object for SqlAlchemy table references"""
 
