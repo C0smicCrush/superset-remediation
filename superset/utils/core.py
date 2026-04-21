@@ -534,41 +534,236 @@ def markdown(raw: str, markup_wrap: bool | None = False) -> str:
     return safe
 
 
-def sanitize_svg_content(svg_content: str) -> str:
-    """Basic SVG protection - remove obvious XSS vectors, trust admin input otherwise.
+# Allowlist of SVG tags considered safe for inline rendering. Intentionally
+# excludes executable/foreign-content tags (script, foreignObject, iframe,
+# object, embed, etc.) and resource loaders (image, use with external refs
+# are further constrained by the href URL sanitizer below).
+_SAFE_SVG_TAGS: frozenset[str] = frozenset(
+    {
+        "svg",
+        "g",
+        "defs",
+        "title",
+        "desc",
+        "metadata",
+        "symbol",
+        "use",
+        "path",
+        "rect",
+        "circle",
+        "ellipse",
+        "line",
+        "polyline",
+        "polygon",
+        "text",
+        "tspan",
+        "textPath",
+        "clipPath",
+        "mask",
+        "pattern",
+        "marker",
+        "linearGradient",
+        "radialGradient",
+        "stop",
+        "animate",
+        "animateTransform",
+        "animateMotion",
+        "mpath",
+        "set",
+        "filter",
+        "feGaussianBlur",
+        "feOffset",
+        "feBlend",
+        "feColorMatrix",
+        "feComponentTransfer",
+        "feComposite",
+        "feConvolveMatrix",
+        "feFlood",
+        "feMerge",
+        "feMergeNode",
+        "feMorphology",
+        "feTurbulence",
+        "feDisplacementMap",
+        "feDiffuseLighting",
+        "feSpecularLighting",
+        "feDistantLight",
+        "fePointLight",
+        "feSpotLight",
+        "feTile",
+        "feFuncR",
+        "feFuncG",
+        "feFuncB",
+        "feFuncA",
+    }
+)
 
-    Minimal protection approach that removes scripts and javascript: URLs while
-    preserving all legitimate SVG features. Assumes admin-provided content.
+# Presentation/geometry/animation attributes allowed on SVG elements. Deliberately
+# omits event handlers (on*), href/xlink:href (those are handled by a follow-up
+# pass that drops any remaining javascript:/data: schemes), and any attribute
+# that could load an external resource with script semantics.
+_SAFE_SVG_ATTRS: dict[str, set[str]] = {
+    "*": {
+        "id",
+        "class",
+        "fill",
+        "stroke",
+        "stroke-width",
+        "stroke-linecap",
+        "stroke-linejoin",
+        "stroke-dasharray",
+        "stroke-dashoffset",
+        "stroke-miterlimit",
+        "stroke-opacity",
+        "fill-opacity",
+        "fill-rule",
+        "opacity",
+        "transform",
+        "d",
+        "x",
+        "y",
+        "x1",
+        "x2",
+        "y1",
+        "y2",
+        "cx",
+        "cy",
+        "r",
+        "rx",
+        "ry",
+        "width",
+        "height",
+        "viewBox",
+        "viewbox",
+        "preserveAspectRatio",
+        "preserveaspectratio",
+        "xmlns",
+        "xmlns:xlink",
+        "version",
+        "points",
+        "offset",
+        "gradientTransform",
+        "gradienttransform",
+        "gradientUnits",
+        "gradientunits",
+        "patternUnits",
+        "patternunits",
+        "patternContentUnits",
+        "patterncontentunits",
+        "patternTransform",
+        "patterntransform",
+        "spreadMethod",
+        "spreadmethod",
+        "color",
+        "clip-path",
+        "clip-rule",
+        "mask",
+        "filter",
+        "font-family",
+        "font-size",
+        "font-weight",
+        "font-style",
+        "text-anchor",
+        "dominant-baseline",
+        "alignment-baseline",
+        "baseline-shift",
+        "letter-spacing",
+        "word-spacing",
+        "begin",
+        "dur",
+        "end",
+        "min",
+        "max",
+        "restart",
+        "repeatCount",
+        "repeatcount",
+        "repeatDur",
+        "repeatdur",
+        "values",
+        "keyTimes",
+        "keytimes",
+        "keySplines",
+        "keysplines",
+        "from",
+        "to",
+        "by",
+        "calcMode",
+        "calcmode",
+        "additive",
+        "accumulate",
+        "attributeName",
+        "attributename",
+        "attributeType",
+        "attributetype",
+        "type",
+        "result",
+        "in",
+        "in2",
+        "mode",
+        "stdDeviation",
+        "stddeviation",
+        "dx",
+        "dy",
+        "order",
+        "flood-color",
+        "flood-opacity",
+        "stop-color",
+        "stop-opacity",
+        "orient",
+        "refX",
+        "refx",
+        "refY",
+        "refy",
+        "markerWidth",
+        "markerwidth",
+        "markerHeight",
+        "markerheight",
+        "markerUnits",
+        "markerunits",
+    }
+}
+
+
+def sanitize_svg_content(svg_content: str) -> str:
+    """Sanitize SVG markup with a strict allowlist before inline rendering.
+
+    SVG payloads that are rendered inline (for example ``brandSpinnerSvg``
+    on custom themes, which ``spa.html`` emits with ``| safe``) execute
+    any ``<script>`` element the browser sees, so this function must be
+    a true allowlist sanitizer rather than a regex blocklist. We delegate
+    to ``nh3`` (the same library ``sanitize_markdown_html`` already uses)
+    with an explicit allowlist of SVG tags/attributes; everything else
+    — including ``<script>``, ``<foreignObject>``, ``<iframe>``,
+    ``on*`` handlers, and ``javascript:`` / ``data:`` URL attributes —
+    is stripped.
 
     Args:
-        svg_content: Raw SVG content string
+        svg_content: Raw SVG content string.
 
     Returns:
-        str: SVG content with obvious XSS vectors removed
+        str: SVG content with any non-allowlisted tags, attributes, and
+        URL schemes removed. ``<script>`` element contents are dropped
+        entirely rather than leaked as text.
     """
     if not svg_content or not svg_content.strip():
         return ""
 
-    # Minimal protection: remove obvious malicious content, preserve all SVG features
-    content = re.sub(
-        r"<script[^>]*>.*?</script>", "", svg_content, flags=re.IGNORECASE | re.DOTALL
+    # nh3.clean parses as HTML (including SVG in foreign-content mode),
+    # so HTML5 end-tag quirks like ``</script >``, ``</script/>`` and
+    # ``</script foo>`` are all normalized before allowlisting.
+    cleaned = nh3.clean(
+        svg_content,
+        tags=set(_SAFE_SVG_TAGS),
+        attributes={key: set(value) for key, value in _SAFE_SVG_ATTRS.items()},
+        url_schemes={"http", "https", "mailto"},
+        link_rel=None,
+        strip_comments=True,
     )
-    content = re.sub(r"javascript:", "", content, flags=re.IGNORECASE)
-    content = re.sub(r"data:[^;]*;[^,]*,.*javascript", "", content, flags=re.IGNORECASE)
 
-    # Remove event handlers (simple catch-all approach)
-    content = re.sub(r"\bon\w+\s*=", "", content, flags=re.IGNORECASE)
-
-    # Remove other suspicious patterns
-    content = re.sub(
-        r"<iframe[^>]*>.*?</iframe>", "", content, flags=re.IGNORECASE | re.DOTALL
-    )
-    content = re.sub(
-        r"<object[^>]*>.*?</object>", "", content, flags=re.IGNORECASE | re.DOTALL
-    )
-    content = re.sub(r"<embed[^>]*>", "", content, flags=re.IGNORECASE)
-
-    return content
+    # Defense in depth: nh3 already drops ``javascript:`` URL attributes
+    # for tags it knows about, but a future allowlist addition could
+    # accidentally reintroduce them via an unfiltered href/xlink:href.
+    cleaned = re.sub(r"javascript:", "", cleaned, flags=re.IGNORECASE)
+    return cleaned
 
 
 def sanitize_url(url: str) -> str:

