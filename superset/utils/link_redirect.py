@@ -128,8 +128,17 @@ def is_safe_redirect_url(url: str) -> bool:
 
     stripped = url.strip()
 
+    # Reject URLs containing backslashes. Browsers (Chrome, Firefox, Safari)
+    # normalize backslashes to forward slashes when resolving a Location
+    # header, so shapes like "/\host", "/\\host", "/\/host", or "\\host"
+    # collapse to protocol-relative URLs ("//host") and navigate off-origin.
+    # Legitimate internal Superset URLs do not contain backslashes, so it is
+    # safe to treat any backslash as hostile.
+    if "\\" in stripped:
+        return False
+
     # Block protocol-relative URLs
-    if stripped.startswith("//") or stripped.startswith("\\\\"):
+    if stripped.startswith("//"):
         return False
 
     parsed = urlparse(stripped)

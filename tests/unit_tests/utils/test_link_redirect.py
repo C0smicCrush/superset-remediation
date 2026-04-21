@@ -132,6 +132,37 @@ def test_unsafe_protocol_relative(app: Flask) -> None:
     assert not is_safe_redirect_url("//evil.com/x")
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        # /\host  - mixed slash/backslash prefix (primary bypass)
+        "/\\evil.example/",
+        # /\\host - slash + double backslash
+        "/\\\\evil.example",
+        # /\/host - slash + backslash + slash
+        "/\\/evil.example",
+        # /%5Chost - percent-encoded backslash (Flask decodes before the guard
+        # sees it, but cover the post-decoded shape here too)
+        "/\\evil.example",
+        # \\\\host - raw double-backslash prefix (already blocked, keep guard)
+        "\\\\evil.example",
+        # \host - single leading backslash
+        "\\evil.example",
+        # Backslash buried in the path
+        "/dashboard\\evil.example",
+        # http(s) URL with embedded backslash still rejected
+        "https://superset.example.com\\@evil.example/x",
+    ],
+)
+def test_unsafe_backslash_variants(app: Flask, url: str) -> None:
+    """Regression test for the backslash-prefix open-redirect bypass.
+
+    Browsers normalize ``\\`` to ``/`` when resolving a ``Location`` header,
+    so any backslash in a redirect target is treated as hostile.
+    """
+    assert not is_safe_redirect_url(url)
+
+
 def test_unsafe_empty(app: Flask) -> None:
     assert not is_safe_redirect_url("")
     assert not is_safe_redirect_url("   ")
