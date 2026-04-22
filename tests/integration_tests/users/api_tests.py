@@ -100,6 +100,15 @@ class TestCurrentUserApi(SupersetTestCase):
 
 
 class TestUserApi(SupersetTestCase):
+    def test_avatar_unauthenticated(self):
+        # Regression test: /api/v1/user/<id>/avatar.png must require auth
+        # so that unauthenticated callers cannot enumerate users, leak avatar
+        # URLs via the 301 Location header, or trigger outbound Slack lookups.
+        response = self.client.get("/api/v1/user/1/avatar.png", follow_redirects=False)
+        assert response.status_code == 401
+        response = self.client.get("/api/v1/user/999/avatar.png", follow_redirects=False)
+        assert response.status_code == 401
+
     def test_avatar_with_invalid_user(self):
         self.login(ADMIN_USERNAME)
         response = self.client.get("/api/v1/user/NOT_A_USER/avatar.png")

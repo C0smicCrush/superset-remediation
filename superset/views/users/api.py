@@ -172,6 +172,8 @@ class UserRestApi(BaseSupersetApi):
     openapi_spec_component_schemas = (UserResponseSchema,)
 
     @expose("/<int:user_id>/avatar.png", methods=("GET",))
+    @protect()
+    @permission_name("read")
     @safe
     def avatar(self, user_id: int) -> Response:
         """Get a redirect to the avatar's URL for the user with the given ID.
