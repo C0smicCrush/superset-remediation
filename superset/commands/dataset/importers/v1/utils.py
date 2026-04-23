@@ -15,10 +15,13 @@
 # specific language governing permissions and limitations
 # under the License.
 import gzip
+import ipaddress
 import logging
 import re
+import socket
 from typing import Any
 from urllib import request
+from urllib.parse import urlparse
 
 import pandas as pd
 from flask import current_app as app
@@ -36,6 +39,16 @@ from superset.utils import json
 from superset.utils.core import get_user
 
 logger = logging.getLogger(__name__)
+
+# Schemes that may reach the SSRF-sensitive ``urlopen`` sink. Only ``http`` and
+# ``https`` are accepted from untrusted (schema-validated) inputs. ``file`` is
+# allowed because :func:`superset.examples.helpers.normalize_example_data_url`
+# rewrites trusted ``examples://`` identifiers to ``file://`` paths inside the
+# examples folder (with its own path-traversal protection) before this
+# validator runs; the marshmallow ``URL`` field used by the import schema
+# rejects ``file://`` submissions from end users.
+_ALLOWED_URL_SCHEMES = frozenset({"http", "https"})
+_TRUSTED_LOCAL_URL_SCHEMES = frozenset({"file"})
 
 CHUNKSIZE = 512
 VARCHAR = re.compile(r"VARCHAR\((\d+)\)", re.IGNORECASE)
@@ -80,15 +93,100 @@ def get_dtype(df: pd.DataFrame, dataset: SqlaTable) -> dict[str, VisitableType]:
     }
 
 
+def _is_unsafe_ip(ip_str: str) -> bool:
+    """Return True if ``ip_str`` points at a non-routable / sensitive address.
+
+    Any of the following IP categories are treated as unsafe SSRF targets:
+    private (RFC1918), loopback, link-local (e.g. cloud IMDS
+    ``169.254.169.254``), multicast, reserved, or unspecified.
+    """
+    try:
+        ip_obj = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True
+    return (
+        ip_obj.is_private
+        or ip_obj.is_loopback
+        or ip_obj.is_link_local
+        or ip_obj.is_multicast
+        or ip_obj.is_reserved
+        or ip_obj.is_unspecified
+    )
+
+
+def _validate_remote_host(host: str) -> None:
+    """Resolve ``host`` and reject any result that maps to an unsafe IP.
+
+    Raises :class:`DatasetForbiddenDataURI` if DNS resolution fails or any
+    returned address is private/loopback/link-local/multicast/reserved.
+    Every address returned by :func:`socket.getaddrinfo` is checked so that
+    DNS rebinding or dual-stack responses cannot bypass the filter.
+    """
+    if not host:
+        raise DatasetForbiddenDataURI()
+
+    # Fast path: the host is already a literal IP address.
+    try:
+        literal = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if _is_unsafe_ip(str(literal)):
+            raise DatasetForbiddenDataURI()
+        return
+
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError as ex:
+        raise DatasetForbiddenDataURI() from ex
+
+    for info in infos:
+        sockaddr = info[4]
+        if not sockaddr:
+            raise DatasetForbiddenDataURI()
+        resolved_ip = sockaddr[0]
+        if _is_unsafe_ip(resolved_ip):
+            raise DatasetForbiddenDataURI()
+
+
 def validate_data_uri(data_uri: str) -> None:
     """
-    Validate that the data URI is configured on DATASET_IMPORT_ALLOWED_URLS
-    has a valid URL.
+    Validate that the data URI is safe to fetch from the dataset importer.
 
-    :param data_uri:
-    :return:
+    This applies multiple independent layers of defense so that a
+    misconfigured ``DATASET_IMPORT_ALLOWED_DATA_URLS`` alone cannot expose the
+    importer to server-side request forgery:
+
+    1. The URL scheme must be ``http``/``https``. Internally-produced
+       ``file://`` URLs (emitted by
+       :func:`superset.examples.helpers.normalize_example_data_url`) are
+       permitted because they have their own path-traversal protection and are
+       unreachable via user-submitted YAML (marshmallow's ``URL`` field
+       rejects the ``file`` scheme).
+    2. The URL must match one of the operator-configured allowlist regexes in
+       ``DATASET_IMPORT_ALLOWED_DATA_URLS``. The shipped default is an empty
+       list, which forces operators to explicitly opt in to remote import
+       sources.
+    3. For ``http``/``https`` URLs, the hostname is resolved via DNS and every
+       returned address is checked. Any address that is private, loopback,
+       link-local (including cloud instance metadata at
+       ``169.254.169.254``), multicast, reserved, or unspecified is rejected.
+
+    :raises DatasetForbiddenDataURI: if any layer rejects the URL.
     """
+    parsed = urlparse(data_uri)
+    scheme = (parsed.scheme or "").lower()
+
+    # Internally-normalized example URIs bypass the remote-URL checks because
+    # they point at vendored local files inside the examples folder.
+    if scheme in _TRUSTED_LOCAL_URL_SCHEMES:
+        return
+
+    if scheme not in _ALLOWED_URL_SCHEMES:
+        raise DatasetForbiddenDataURI()
+
     allowed_urls = app.config["DATASET_IMPORT_ALLOWED_DATA_URLS"]
+    matched = False
     for allowed_url in allowed_urls:
         try:
             match = re.match(allowed_url, data_uri)
@@ -98,8 +196,12 @@ def validate_data_uri(data_uri: str) -> None:
             )
             raise
         if match:
-            return
-    raise DatasetForbiddenDataURI()
+            matched = True
+            break
+    if not matched:
+        raise DatasetForbiddenDataURI()
+
+    _validate_remote_host(parsed.hostname or "")
 
 
 def import_dataset(  # noqa: C901
