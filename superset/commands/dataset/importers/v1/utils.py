@@ -144,7 +144,7 @@ def _validate_remote_host(host: str) -> None:
         sockaddr = info[4]
         if not sockaddr:
             raise DatasetForbiddenDataURI()
-        resolved_ip = sockaddr[0]
+        resolved_ip = str(sockaddr[0])
         if _is_unsafe_ip(resolved_ip):
             raise DatasetForbiddenDataURI()
 
