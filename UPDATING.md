@@ -24,6 +24,22 @@ assists people when migrating to a new version.
 
 ## Next
 
+### Dataset Import SSRF Hardening
+
+The v1 dataset importer's remote `data:` URL fetcher has been hardened against
+server-side request forgery.
+
+- `DATASET_IMPORT_ALLOWED_DATA_URLS` now defaults to an **empty list** instead
+  of `[r".*"]`. Operators must explicitly opt in to remote data URLs by
+  listing permitted regex patterns (e.g. `[r"^https://.+\.example\.com/.*"]`).
+  Deployments that relied on the previous wildcard default will need to set
+  an explicit allowlist before importing datasets that include a `data:`
+  field.
+- Regardless of the allowlist, the importer now rejects URLs whose scheme is
+  not `http`/`https`, and rejects URLs whose hostname resolves (via DNS) to a
+  private, loopback, link-local (including cloud instance metadata at
+  `169.254.169.254`), multicast, reserved, or unspecified address.
+
 ### Granular Export Controls
 
 A new feature flag `GRANULAR_EXPORT_CONTROLS` introduces three fine-grained permissions that replace the legacy `can_csv` permission:

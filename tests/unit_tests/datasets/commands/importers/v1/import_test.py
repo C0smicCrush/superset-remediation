@@ -589,6 +589,14 @@ def test_import_column_allowed_data_url(
     mock_urlopen.return_value = io.StringIO("col1\nvalue1\nvalue2\n")
 
     mocker.patch.object(security_manager, "can_access", return_value=True)
+    # Stub DNS resolution so the SSRF host filter accepts the test URL
+    # without requiring real network access.
+    mocker.patch(
+        "superset.commands.dataset.importers.v1.utils.socket.getaddrinfo",
+        return_value=[(2, 1, 6, "", ("8.8.8.8", 0))],
+    )
+    # The default allowlist is empty; explicitly permit the test URL.
+    current_app.config["DATASET_IMPORT_ALLOWED_DATA_URLS"] = [r".*"]
 
     engine = db.session.get_bind()
     SqlaTable.metadata.create_all(engine)  # pylint: disable=no-member
@@ -744,6 +752,18 @@ def test_import_dataset_without_owner_permission(
     mock_can_access.assert_called_with("can_write", "Dataset")
 
 
+@pytest.fixture
+def _public_dns(mocker: MockerFixture) -> None:
+    """Mock :func:`socket.getaddrinfo` to always return a public IPv4 address.
+
+    Used so the SSRF host filter does not depend on real DNS during tests.
+    """
+    mocker.patch(
+        "superset.commands.dataset.importers.v1.utils.socket.getaddrinfo",
+        return_value=[(2, 1, 6, "", ("8.8.8.8", 0))],
+    )
+
+
 @pytest.mark.parametrize(
     "allowed_urls, data_uri, expected, exception_class",
     [
@@ -776,6 +796,7 @@ def test_import_dataset_without_owner_permission(
         (["*"], "https://host1.domain3.com/data.csv", False, re.error),
     ],
 )
+@pytest.mark.usefixtures("_public_dns")
 def test_validate_data_uri(allowed_urls, data_uri, expected, exception_class):
     current_app.config["DATASET_IMPORT_ALLOWED_DATA_URLS"] = allowed_urls
     if expected:
@@ -783,3 +804,100 @@ def test_validate_data_uri(allowed_urls, data_uri, expected, exception_class):
     else:
         with pytest.raises(exception_class):
             validate_data_uri(data_uri)
+
+
+@pytest.mark.parametrize(
+    "data_uri",
+    [
+        # Loopback
+        "http://127.0.0.1/data.csv",
+        "http://[::1]/data.csv",
+        # Cloud instance metadata (AWS IMDS, GCP, etc.) — link-local
+        "http://169.254.169.254/latest/meta-data/iam/security-credentials/role",
+        # RFC1918 private ranges
+        "http://10.0.0.5/data.csv",
+        "http://192.168.1.1/data.csv",
+        "http://172.16.0.1/data.csv",
+        # Multicast / reserved / unspecified
+        "http://224.0.0.1/data.csv",
+        "http://240.0.0.1/data.csv",
+        "http://0.0.0.0/data.csv",
+    ],
+)
+def test_validate_data_uri_rejects_ssrf_literal_ips(data_uri: str) -> None:
+    """SSRF filter rejects private/loopback/link-local/multicast IP literals
+    regardless of what ``DATASET_IMPORT_ALLOWED_DATA_URLS`` permits."""
+    current_app.config["DATASET_IMPORT_ALLOWED_DATA_URLS"] = [r".*"]
+    with pytest.raises(DatasetForbiddenDataURI):
+        validate_data_uri(data_uri)
+
+
+def test_validate_data_uri_rejects_dns_resolving_to_private_ip(
+    mocker: MockerFixture,
+) -> None:
+    """SSRF filter rejects hosts that DNS-resolve to an unsafe address."""
+    current_app.config["DATASET_IMPORT_ALLOWED_DATA_URLS"] = [r".*"]
+    mocker.patch(
+        "superset.commands.dataset.importers.v1.utils.socket.getaddrinfo",
+        return_value=[(2, 1, 6, "", ("10.0.0.5", 0))],
+    )
+    with pytest.raises(DatasetForbiddenDataURI):
+        validate_data_uri("http://attacker.example.com/ssrf")
+
+
+def test_validate_data_uri_rejects_unresolvable_host(
+    mocker: MockerFixture,
+) -> None:
+    """SSRF filter rejects hosts that fail DNS resolution (fail closed)."""
+    import socket as real_socket
+
+    current_app.config["DATASET_IMPORT_ALLOWED_DATA_URLS"] = [r".*"]
+    mocker.patch(
+        "superset.commands.dataset.importers.v1.utils.socket.getaddrinfo",
+        side_effect=real_socket.gaierror("name or service not known"),
+    )
+    with pytest.raises(DatasetForbiddenDataURI):
+        validate_data_uri("http://nonexistent.invalid/ssrf")
+
+
+@pytest.mark.parametrize(
+    "data_uri",
+    [
+        "ftp://example.com/data.csv",
+        "ftps://example.com/data.csv",
+        "gopher://example.com/data.csv",
+        "data:text/plain,hello",
+        "javascript:alert(1)",
+        # ``file://`` is rejected by the schema for user input; the validator
+        # itself permits it because :func:`normalize_example_data_url`
+        # produces safe, examples-folder-rooted ``file://`` paths internally.
+        # Anything else with a non-http scheme must be rejected.
+        "ssh://example.com/data.csv",
+    ],
+)
+def test_validate_data_uri_rejects_unsupported_schemes(data_uri: str) -> None:
+    """Only http/https (and internally-produced file://) schemes are allowed."""
+    current_app.config["DATASET_IMPORT_ALLOWED_DATA_URLS"] = [r".*"]
+    with pytest.raises(DatasetForbiddenDataURI):
+        validate_data_uri(data_uri)
+
+
+def test_validate_data_uri_allows_trusted_file_scheme() -> None:
+    """Internally-produced ``file://`` URIs bypass the remote-URL checks.
+
+    :func:`superset.examples.helpers.normalize_example_data_url` rewrites
+    trusted ``examples://`` identifiers to ``file://`` paths inside the
+    examples folder, and marshmallow's ``URL`` field rejects the ``file``
+    scheme on user-submitted input, so reaching this branch requires trusted
+    code to have already produced the URI.
+    """
+    current_app.config["DATASET_IMPORT_ALLOWED_DATA_URLS"] = []
+    validate_data_uri("file:///var/lib/superset/examples/birth_names/data.parquet")
+
+
+@pytest.mark.usefixtures("_public_dns")
+def test_validate_data_uri_empty_allowlist_rejects_http() -> None:
+    """With the shipped default (empty allowlist), every remote URL is rejected."""
+    current_app.config["DATASET_IMPORT_ALLOWED_DATA_URLS"] = []
+    with pytest.raises(DatasetForbiddenDataURI):
+        validate_data_uri("https://example.com/data.csv")
