@@ -343,6 +343,51 @@ def test_url_param_unescaped_default_form_data() -> None:
         assert cache.url_param("bar", "O'Malley", escape_result=False) == "O'Malley"
 
 
+def test_url_param_escaped_request_args() -> None:
+    """
+    Test that ``url_param`` escapes values from ``request.args`` when a dialect
+    is present, preventing SQL injection via the query string.
+    """
+    with current_app.test_request_context(query_string={"foo": "O'Brien"}):
+        cache = ExtraCache(dialect=dialect())
+        assert cache.url_param("foo") == "O''Brien"
+
+
+def test_url_param_escaped_request_args_sqli_payload() -> None:
+    """
+    Test that ``url_param`` escapes a SQL injection payload from
+    ``request.args``.
+    """
+    with current_app.test_request_context(
+        query_string={"region": "' UNION SELECT username,password FROM ab_user --"}
+    ):
+        cache = ExtraCache(dialect=dialect())
+        result = cache.url_param("region")
+        assert result is not None
+        assert result == "'' UNION SELECT username,password FROM ab_user --"
+
+
+def test_url_param_unescaped_request_args() -> None:
+    """
+    Test that ``url_param`` returns the raw value from ``request.args``
+    when ``escape_result`` is False.
+    """
+    with current_app.test_request_context(query_string={"foo": "O'Brien"}):
+        cache = ExtraCache(dialect=dialect())
+        assert cache.url_param("foo", escape_result=False) == "O'Brien"
+
+
+def test_url_param_request_args_cache_key() -> None:
+    """
+    Test that ``url_param`` from ``request.args`` adds the value to cache keys.
+    """
+    with current_app.test_request_context(query_string={"foo": "bar"}):
+        cache = ExtraCache(extra_cache_keys=[])
+        cache.url_param("foo")
+        assert cache.extra_cache_keys is not None
+        assert "bar" in cache.extra_cache_keys
+
+
 def test_safe_proxy_primitive() -> None:
     """
     Test the ``safe_proxy`` helper with a function returning a ``str``.
