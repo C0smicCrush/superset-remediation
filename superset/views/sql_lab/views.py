@@ -143,6 +143,21 @@ class TabStateView(BaseSupersetView):
             db.session.rollback()
             return json_error_response(error_msg_from_exception(ex), 400)
 
+    _put_allowed_fields = {
+        "autorun",
+        "catalog",
+        "database_id",
+        "extra_json",
+        "hide_left_bar",
+        "label",
+        "latest_query_id",
+        "query_limit",
+        "saved_query_id",
+        "schema",
+        "sql",
+        "template_params",
+    }
+
     @has_access_api
     @expose("<int:tab_state_id>", methods=("PUT",))
     def put(self, tab_state_id: int) -> FlaskResponse:
@@ -153,7 +168,11 @@ class TabStateView(BaseSupersetView):
             return Response(status=403)
 
         try:
-            fields = {k: json.loads(v) for k, v in request.form.to_dict().items()}
+            fields = {
+                k: json.loads(v)
+                for k, v in request.form.to_dict().items()
+                if k in self._put_allowed_fields
+            }
             db.session.query(TabState).filter_by(id=tab_state_id).update(fields)
             db.session.commit()
             return json_success(json.dumps(tab_state_id))
