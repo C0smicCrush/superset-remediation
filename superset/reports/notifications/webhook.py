@@ -17,7 +17,6 @@
 
 import logging
 from typing import Any
-from urllib.parse import urlparse
 
 import backoff
 import requests
@@ -32,6 +31,7 @@ from superset.reports.notifications.exceptions import (
 )
 from superset.utils import json
 from superset.utils.decorators import statsd_gauge
+from superset.utils.url_validation import ssrf_safe_post, validate_webhook_url
 
 logger = logging.getLogger(__name__)
 
@@ -104,11 +104,18 @@ class WebhookNotification(BaseNotification):
                 is not enabled."
             )
         wh_url = self._get_webhook_url()
-        if current_app.config["ALERT_REPORTS_WEBHOOK_HTTPS_ONLY"]:
-            if urlparse(wh_url).scheme.lower() != "https":
-                raise NotificationParamException(
-                    "Webhook failed: HTTPS is required by config for webhook URLs."
-                )
+        https_only = current_app.config.get("ALERT_REPORTS_WEBHOOK_HTTPS_ONLY", True)
+        allowed_domains: list[str] | None = current_app.config.get(
+            "ALERT_REPORTS_WEBHOOK_ALLOWED_DOMAINS"
+        )
+        error = validate_webhook_url(
+            wh_url,
+            https_only=https_only,
+            allowed_domains=allowed_domains,
+        )
+        if error:
+            raise NotificationParamException(f"Webhook failed: {error}")
+
         payload = self._get_req_payload()
         files = self._get_files()
 
@@ -121,9 +128,18 @@ class WebhookNotification(BaseNotification):
                     else:
                         data[key] = value
 
-                response = requests.post(wh_url, data=data, files=files, timeout=60)
+                response = ssrf_safe_post(
+                    wh_url,
+                    data=data,
+                    files=files,
+                    timeout=60,
+                )
             else:
-                response = requests.post(wh_url, json=payload, timeout=60)
+                response = ssrf_safe_post(
+                    wh_url,
+                    json=payload,
+                    timeout=60,
+                )
 
             logger.info(
                 "Webhook sent to %s, status code: %s", wh_url, response.status_code
