@@ -31,6 +31,7 @@ from superset.reports.models import (
     ReportScheduleType,
     ReportScheduleValidatorType,
 )
+from superset.utils.url_validation import validate_webhook_url
 
 openapi_spec_methods_override = {
     "get": {"get": {"summary": "Get a report schedule"}},
@@ -140,6 +141,30 @@ class ReportRecipientSchema(Schema):
         ),
     )
     recipient_config_json = fields.Nested(ReportRecipientConfigJSONSchema)
+
+    @validates_schema
+    def validate_webhook_recipients(self, data: dict[str, Any], **kwargs: Any) -> None:
+        if data.get("type") != ReportRecipientType.WEBHOOK.value:
+            return
+
+        config = data.get("recipient_config_json") or {}
+        target = config.get("target")
+        if not target:
+            raise ValidationError(
+                {"target": ["Webhook URL is required for Webhook recipients"]}
+            )
+
+        https_only = current_app.config.get("ALERT_REPORTS_WEBHOOK_HTTPS_ONLY", True)
+        allowed_domains: list[str] | None = current_app.config.get(
+            "ALERT_REPORTS_WEBHOOK_ALLOWED_DOMAINS"
+        )
+        error = validate_webhook_url(
+            target,
+            https_only=https_only,
+            allowed_domains=allowed_domains,
+        )
+        if error:
+            raise ValidationError({"target": [error]})
 
     @validates_schema
     def validate_email_recipients(self, data: dict[str, Any], **kwargs: Any) -> None:

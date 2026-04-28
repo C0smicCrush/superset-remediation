@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -211,7 +212,10 @@ def test_send_http_only_https_check(monkeypatch, mock_header_data) -> None:
     )
 
     class MockCurrentApp:
-        config = {"ALERT_REPORTS_WEBHOOK_HTTPS_ONLY": True}
+        config: dict[str, Any] = {
+            "ALERT_REPORTS_WEBHOOK_HTTPS_ONLY": True,
+            "ALERT_REPORTS_WEBHOOK_ALLOWED_DOMAINS": None,
+        }
 
     monkeypatch.setattr(
         "superset.reports.notifications.webhook.current_app", MockCurrentApp
@@ -221,5 +225,114 @@ def test_send_http_only_https_check(monkeypatch, mock_header_data) -> None:
         lambda flag: True,
     )
 
-    with pytest.raises(NotificationParamException, match="HTTPS is required by config"):
+    with pytest.raises(NotificationParamException, match="https"):
+        webhook_notification.send()
+
+
+def test_send_rejects_private_ip_url(monkeypatch, mock_header_data) -> None:
+    """
+    Test send raises when URL points to a private/internal IP address
+    """
+    from superset.reports.models import ReportRecipients, ReportRecipientType
+    from superset.reports.notifications.base import NotificationContent
+
+    content = NotificationContent(
+        name="test alert", header_data=mock_header_data, description="Test description"
+    )
+    webhook_notification = WebhookNotification(
+        recipient=ReportRecipients(
+            type=ReportRecipientType.WEBHOOK,
+            recipient_config_json='{"target": "https://169.254.169.254/latest/meta-data/"}',
+        ),
+        content=content,
+    )
+
+    class MockCurrentApp:
+        config: dict[str, Any] = {
+            "ALERT_REPORTS_WEBHOOK_HTTPS_ONLY": True,
+            "ALERT_REPORTS_WEBHOOK_ALLOWED_DOMAINS": None,
+        }
+
+    monkeypatch.setattr(
+        "superset.reports.notifications.webhook.current_app", MockCurrentApp
+    )
+    monkeypatch.setattr(
+        "superset.reports.notifications.webhook.feature_flag_manager.is_feature_enabled",
+        lambda flag: True,
+    )
+
+    with pytest.raises(NotificationParamException, match="private"):
+        webhook_notification.send()
+
+
+def test_send_rejects_loopback_url(monkeypatch, mock_header_data) -> None:
+    """
+    Test send raises when URL points to loopback address
+    """
+    from superset.reports.models import ReportRecipients, ReportRecipientType
+    from superset.reports.notifications.base import NotificationContent
+
+    content = NotificationContent(
+        name="test alert", header_data=mock_header_data, description="Test description"
+    )
+    webhook_notification = WebhookNotification(
+        recipient=ReportRecipients(
+            type=ReportRecipientType.WEBHOOK,
+            recipient_config_json='{"target": "https://127.0.0.1/admin"}',
+        ),
+        content=content,
+    )
+
+    class MockCurrentApp:
+        config: dict[str, Any] = {
+            "ALERT_REPORTS_WEBHOOK_HTTPS_ONLY": True,
+            "ALERT_REPORTS_WEBHOOK_ALLOWED_DOMAINS": None,
+        }
+
+    monkeypatch.setattr(
+        "superset.reports.notifications.webhook.current_app", MockCurrentApp
+    )
+    monkeypatch.setattr(
+        "superset.reports.notifications.webhook.feature_flag_manager.is_feature_enabled",
+        lambda flag: True,
+    )
+
+    with pytest.raises(NotificationParamException, match="private"):
+        webhook_notification.send()
+
+
+def test_send_rejects_domain_not_in_allowlist(monkeypatch, mock_header_data) -> None:
+    """
+    Test send raises when URL hostname is not in the allowed domains list
+    """
+    from superset.reports.models import ReportRecipients, ReportRecipientType
+    from superset.reports.notifications.base import NotificationContent
+
+    content = NotificationContent(
+        name="test alert", header_data=mock_header_data, description="Test description"
+    )
+    webhook_notification = WebhookNotification(
+        recipient=ReportRecipients(
+            type=ReportRecipientType.WEBHOOK,
+            recipient_config_json='{"target": "https://evil.com/hook"}',
+        ),
+        content=content,
+    )
+
+    class MockCurrentApp:
+        config: dict[str, Any] = {
+            "ALERT_REPORTS_WEBHOOK_HTTPS_ONLY": True,
+            "ALERT_REPORTS_WEBHOOK_ALLOWED_DOMAINS": ["hooks.slack.com"],
+        }
+
+    monkeypatch.setattr(
+        "superset.reports.notifications.webhook.current_app", MockCurrentApp
+    )
+    monkeypatch.setattr(
+        "superset.reports.notifications.webhook.feature_flag_manager.is_feature_enabled",
+        lambda flag: True,
+    )
+    monkeypatch.setattr("superset.utils.url_validation.is_private_ip", lambda h: False)
+
+    with pytest.raises(NotificationParamException, match="allowed domains"):
         webhook_notification.send()
