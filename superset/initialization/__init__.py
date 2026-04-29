@@ -37,7 +37,7 @@ from flask_compress import Compress
 from flask_session import Session
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from superset.constants import CHANGE_ME_SECRET_KEY
+from superset.constants import CHANGE_ME_SECRET_KEY, DEFAULT_GUEST_TOKEN_JWT_SECRET
 from superset.databases.utils import make_url_safe
 from superset.extensions import (
     _event_logger,
@@ -654,6 +654,35 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
             logger.error("Refusing to start due to insecure SECRET_KEY")
             sys.exit(1)
 
+    def check_guest_token_jwt_secret(self) -> None:
+        def log_default_guest_secret_warning() -> None:
+            top_banner = 80 * "-" + "\n" + 36 * " " + "WARNING\n" + 80 * "-"
+            bottom_banner = 80 * "-" + "\n" + 80 * "-"
+            logger.warning(top_banner)
+            logger.warning(
+                "A default GUEST_TOKEN_JWT_SECRET was detected, please use "
+                "superset_config.py to override it.\n"
+                "Use a strong complex alphanumeric string and use a tool to help"
+                " you generate \n"
+                "a sufficiently random sequence, ex: openssl rand -base64 42"
+            )
+            logger.warning(bottom_banner)
+
+        if self.config["GUEST_TOKEN_JWT_SECRET"] == DEFAULT_GUEST_TOKEN_JWT_SECRET:
+            if (
+                self.superset_app.debug
+                or self.superset_app.config["TESTING"]
+                or is_test()
+            ):
+                logger.warning(
+                    "Debug mode identified with default GUEST_TOKEN_JWT_SECRET"
+                )
+                log_default_guest_secret_warning()
+                return
+            log_default_guest_secret_warning()
+            logger.error("Refusing to start due to insecure GUEST_TOKEN_JWT_SECRET")
+            sys.exit(1)
+
     def configure_session(self) -> None:
         if self.config["SESSION_SERVER_SIDE"]:
             Session(self.superset_app)
@@ -732,6 +761,7 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
         """
         self.pre_init()
         self.check_secret_key()
+        self.check_guest_token_jwt_secret()
         self.configure_session()
         # Configuration of logging must be done first to apply the formatter properly
         self.configure_logging()
