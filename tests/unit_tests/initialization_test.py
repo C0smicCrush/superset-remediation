@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 from sqlalchemy.exc import OperationalError
 
 from superset.app import AppRootMiddleware, create_app, SupersetApp
+from superset.constants import DEFAULT_GUEST_TOKEN_JWT_SECRET
 from superset.initialization import SupersetAppInitializer
 
 
@@ -257,3 +258,102 @@ class TestCreateAppRoot:
 
         assert isinstance(app.wsgi_app, AppRootMiddleware)
         assert app.wsgi_app.app_root == "/from-param"
+
+
+class TestCheckGuestTokenJwtSecret:
+    """Tests for startup enforcement of GUEST_TOKEN_JWT_SECRET."""
+
+    @patch("superset.initialization.sys.exit")
+    @patch("superset.initialization.logger")
+    def test_default_secret_in_production_exits(
+        self, mock_logger: MagicMock, mock_exit: MagicMock
+    ) -> None:
+        """Non-debug, non-testing mode with default secret should call sys.exit(1)."""
+        mock_app = MagicMock()
+        mock_app.debug = False
+        mock_app.config = {
+            "GUEST_TOKEN_JWT_SECRET": DEFAULT_GUEST_TOKEN_JWT_SECRET,
+            "TESTING": False,
+        }
+        initializer = SupersetAppInitializer(mock_app)
+        with patch("superset.initialization.is_test", return_value=False):
+            initializer.check_guest_token_jwt_secret()
+        mock_exit.assert_called_once_with(1)
+        mock_logger.error.assert_called_once_with(
+            "Refusing to start due to insecure GUEST_TOKEN_JWT_SECRET"
+        )
+
+    @patch("superset.initialization.sys.exit")
+    @patch("superset.initialization.logger")
+    def test_default_secret_in_debug_mode_warns(
+        self, mock_logger: MagicMock, mock_exit: MagicMock
+    ) -> None:
+        """Debug mode with default secret should warn but not exit."""
+        mock_app = MagicMock()
+        mock_app.debug = True
+        mock_app.config = {
+            "GUEST_TOKEN_JWT_SECRET": DEFAULT_GUEST_TOKEN_JWT_SECRET,
+            "TESTING": False,
+        }
+        initializer = SupersetAppInitializer(mock_app)
+        with patch("superset.initialization.is_test", return_value=False):
+            initializer.check_guest_token_jwt_secret()
+        mock_exit.assert_not_called()
+        mock_logger.warning.assert_any_call(
+            "Debug mode identified with default GUEST_TOKEN_JWT_SECRET"
+        )
+
+    @patch("superset.initialization.sys.exit")
+    @patch("superset.initialization.logger")
+    def test_default_secret_in_testing_mode_warns(
+        self, mock_logger: MagicMock, mock_exit: MagicMock
+    ) -> None:
+        """Testing mode with default secret should warn but not exit."""
+        mock_app = MagicMock()
+        mock_app.debug = False
+        mock_app.config = {
+            "GUEST_TOKEN_JWT_SECRET": DEFAULT_GUEST_TOKEN_JWT_SECRET,
+            "TESTING": True,
+        }
+        initializer = SupersetAppInitializer(mock_app)
+        with patch("superset.initialization.is_test", return_value=False):
+            initializer.check_guest_token_jwt_secret()
+        mock_exit.assert_not_called()
+
+    @patch("superset.initialization.sys.exit")
+    @patch("superset.initialization.logger")
+    def test_custom_secret_does_not_exit(
+        self, mock_logger: MagicMock, mock_exit: MagicMock
+    ) -> None:
+        """A custom (non-default) secret should not trigger warnings or exit."""
+        mock_app = MagicMock()
+        mock_app.debug = False
+        mock_app.config = {
+            "GUEST_TOKEN_JWT_SECRET": "my-custom-production-secret",
+            "TESTING": False,
+        }
+        initializer = SupersetAppInitializer(mock_app)
+        with patch("superset.initialization.is_test", return_value=False):
+            initializer.check_guest_token_jwt_secret()
+        mock_exit.assert_not_called()
+        mock_logger.error.assert_not_called()
+
+    @patch("superset.initialization.sys.exit")
+    @patch("superset.initialization.logger")
+    def test_default_secret_in_is_test_warns(
+        self, mock_logger: MagicMock, mock_exit: MagicMock
+    ) -> None:
+        """is_test() returning True with default secret should warn but not exit."""
+        mock_app = MagicMock()
+        mock_app.debug = False
+        mock_app.config = {
+            "GUEST_TOKEN_JWT_SECRET": DEFAULT_GUEST_TOKEN_JWT_SECRET,
+            "TESTING": False,
+        }
+        initializer = SupersetAppInitializer(mock_app)
+        with patch("superset.initialization.is_test", return_value=True):
+            initializer.check_guest_token_jwt_secret()
+        mock_exit.assert_not_called()
+        mock_logger.warning.assert_any_call(
+            "Debug mode identified with default GUEST_TOKEN_JWT_SECRET"
+        )
