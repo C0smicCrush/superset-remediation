@@ -1528,8 +1528,6 @@ class DatabaseRestApi(BaseSupersetModelRestApi):
             as_attachment=True,
             download_name=filename,
         )
-        if token := request.args.get("token"):
-            response.set_cookie(token, "done", max_age=600)
         return response
 
     @expose("/import/", methods=("POST",))
