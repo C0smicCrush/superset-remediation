@@ -1251,8 +1251,6 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
             as_attachment=True,
             download_name=filename,
         )
-        if token := request.args.get("token"):
-            response.set_cookie(token, "done", max_age=600)
         return response
 
     @expose("/<pk>/export_as_example/", methods=("GET",))
@@ -1342,8 +1340,6 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
             as_attachment=True,
             download_name=filename,
         )
-        if token := request.args.get("token"):
-            response.set_cookie(token, "done", max_age=600)
         return response
 
     @expose("/<pk>/cache_dashboard_screenshot/", methods=("POST",))
