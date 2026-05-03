@@ -16,6 +16,7 @@
 # under the License.
 # pylint: disable=consider-using-transaction
 import logging
+from typing import Optional
 
 from flask import request, Response
 from flask_appbuilder import expose
@@ -49,6 +50,22 @@ class SavedQueryView(BaseSupersetView):
 
 def _get_owner_id(tab_state_id: int) -> int:
     return db.session.query(TabState.user_id).filter_by(id=tab_state_id).scalar()
+
+
+def _get_table_schema_owner_id(table_schema_id: int) -> Optional[int]:
+    """
+    Resolve the owning ``user_id`` of a ``TableSchema`` row via its parent
+    ``TabState``.
+
+    Returns the owner ``user_id`` or ``None`` if the ``TableSchema`` row does
+    not exist (or its parent ``TabState`` cannot be resolved).
+    """
+    return (
+        db.session.query(TabState.user_id)
+        .join(TableSchema, TableSchema.tab_state_id == TabState.id)
+        .filter(TableSchema.id == table_schema_id)
+        .scalar()
+    )
 
 
 class TabStateView(BaseSupersetView):
@@ -256,6 +273,12 @@ class TableSchemaView(BaseSupersetView):
     @expose("/<int:table_schema_id>", methods=("DELETE",))
     def delete(self, table_schema_id: int) -> FlaskResponse:
         try:
+            owner_id = _get_table_schema_owner_id(table_schema_id)
+            if owner_id is None:
+                return Response(status=404)
+            if owner_id != get_user_id():
+                return Response(status=403)
+
             db.session.query(TableSchema).filter(
                 TableSchema.id == table_schema_id
             ).delete(synchronize_session=False)
@@ -268,6 +291,12 @@ class TableSchemaView(BaseSupersetView):
     @has_access_api
     @expose("/<int:table_schema_id>/expanded", methods=("POST",))
     def expanded(self, table_schema_id: int) -> FlaskResponse:
+        owner_id = _get_table_schema_owner_id(table_schema_id)
+        if owner_id is None:
+            return Response(status=404)
+        if owner_id != get_user_id():
+            return Response(status=403)
+
         payload = json.loads(request.form["expanded"])
         (
             db.session.query(TableSchema)
