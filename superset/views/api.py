@@ -24,7 +24,7 @@ from flask_appbuilder.api import rison
 from flask_appbuilder.security.decorators import has_access_api
 from flask_babel import lazy_gettext as _
 
-from superset import db, event_logger
+from superset import db, event_logger, security_manager
 from superset.commands.chart.exceptions import (
     TimeRangeAmbiguousError,
     TimeRangeParseFailError,
@@ -84,11 +84,22 @@ class Api(BaseSupersetView):
         """
         Get the form_data stored in the database for existing slice.
         params: slice_id: integer
+
+        The caller must have access to the chart's underlying datasource
+        (or be an owner / admin). Without this check the endpoint leaks
+        the full chart configuration — including ad-hoc filter SQL,
+        custom metric SQL and datasource references — to any user with
+        ``can_query_form_data`` on ``Api``, which is granted to
+        chart-rendering roles such as Gamma and (when
+        ``PUBLIC_ROLE_LIKE`` is configured) to anonymous callers.
+
+        raises SupersetSecurityException: If the user cannot access the chart
         """
-        form_data = {}
+        form_data: dict[str, Any] = {}
         if slice_id := request.args.get("slice_id"):
             slc = db.session.query(Slice).filter_by(id=slice_id).one_or_none()
             if slc:
+                security_manager.raise_for_access(chart=slc)
                 form_data = slc.form_data.copy()
 
         update_time_range(form_data)
