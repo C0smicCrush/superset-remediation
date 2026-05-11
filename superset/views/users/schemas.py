@@ -14,17 +14,22 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+from typing import Any
+
 from flask_appbuilder.security.sqla.apis.user.schema import User
 from flask_appbuilder.security.sqla.apis.user.validator import (
     PasswordComplexityValidator,
 )
-from marshmallow import fields, Schema
+from marshmallow import fields, Schema, validates_schema, ValidationError
 from marshmallow.fields import Boolean, Integer, String
 from marshmallow.validate import Length
 
 first_name_description = "The current user's first name"
 last_name_description = "The current user's last name"
-password_description = "The current user's password for authentication"  # noqa: S105
+password_description = "The current user's new password"  # noqa: S105
+current_password_description = (
+    "The current user's existing password, required when changing the password"  # noqa: S105
+)
 
 
 class UserResponseSchema(Schema):
@@ -56,3 +61,21 @@ class CurrentUserPutSchema(Schema):
         validate=[PasswordComplexityValidator()],
         metadata={"description": password_description},
     )
+    current_password = fields.String(
+        required=False,
+        load_only=True,
+        metadata={"description": current_password_description},
+    )
+
+    @validates_schema
+    def validate_password_change(self, data: dict[str, Any], **kwargs: Any) -> None:
+        """Require ``current_password`` whenever ``password`` is supplied.
+
+        Verifying the existing password is performed in the view layer with
+        ``check_password_hash`` against the authenticated user's stored hash.
+        """
+        if data.get("password") and not data.get("current_password"):
+            raise ValidationError(
+                "current_password is required when changing password.",
+                field_name="current_password",
+            )

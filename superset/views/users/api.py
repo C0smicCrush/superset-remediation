@@ -23,7 +23,7 @@ from flask_appbuilder.security.decorators import protect
 from flask_appbuilder.security.sqla.models import User
 from marshmallow import ValidationError
 from sqlalchemy.orm.exc import NoResultFound
-from werkzeug.security import generate_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from superset import is_feature_enabled
 from superset.daos.user import UserDAO
@@ -151,8 +151,22 @@ class CurrentUserRestApi(BaseSupersetApi):
         """
         try:
             item = self.current_user_put_schema.load(request.json)
+            # ``current_password`` is an authentication input; it is never
+            # persisted to the user row. Remove it before the setattr loop.
+            current_password = item.pop("current_password", None)
             if not item:
                 return self.response_400(message="At least one field must be provided.")
+
+            if item.get("password"):
+                user_password = getattr(g.user, "password", None)
+                if (
+                    not current_password
+                    or not user_password
+                    or not check_password_hash(user_password, current_password)
+                ):
+                    return self.response_400(
+                        message={"current_password": ["Current password is incorrect."]}
+                    )
 
             for key, value in item.items():
                 setattr(g.user, key, value)
