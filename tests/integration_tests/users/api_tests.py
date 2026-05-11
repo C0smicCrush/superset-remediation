@@ -98,6 +98,100 @@ class TestCurrentUserApi(SupersetTestCase):
         rv = self.client.put("/api/v1/me/", json={})
         assert rv.status_code == 400
 
+    def test_update_me_password_requires_current_password(self):
+        """PUT /api/v1/me/ with a new password but no current_password is rejected.
+
+        Regression test for the missing-old-password check that previously
+        allowed account takeover from a compromised session.
+        """
+        self.login(ADMIN_USERNAME)
+
+        rv = self.client.put(
+            "/api/v1/me/",
+            json={"password": "NewAttackerP@ss1!"},
+        )
+        assert rv.status_code == 400
+        data = json.loads(rv.data.decode("utf-8"))
+        assert "current_password" in data["message"]
+
+        # The admin password must still be the original so subsequent tests pass.
+        rv = self.client.post(
+            "/api/v1/security/login",
+            json={
+                "username": ADMIN_USERNAME,
+                "password": "general",
+                "provider": "db",
+            },
+        )
+        assert rv.status_code == 200
+
+    def test_update_me_password_wrong_current_password(self):
+        """PUT /api/v1/me/ with a wrong current_password is rejected."""
+        self.login(ADMIN_USERNAME)
+
+        rv = self.client.put(
+            "/api/v1/me/",
+            json={
+                "password": "NewAttackerP@ss1!",
+                "current_password": "definitely-not-the-password",
+            },
+        )
+        assert rv.status_code == 400
+        data = json.loads(rv.data.decode("utf-8"))
+        assert "current_password" in data["message"]
+
+        rv = self.client.post(
+            "/api/v1/security/login",
+            json={
+                "username": ADMIN_USERNAME,
+                "password": "general",
+                "provider": "db",
+            },
+        )
+        assert rv.status_code == 200
+
+    def test_update_me_password_with_current_password(self):
+        """Happy-path: password change succeeds when current_password is correct."""
+        new_password = "Brand-NewP@ssw0rd!"  # noqa: S105
+        original_password = "general"  # noqa: S105
+
+        self.login(ADMIN_USERNAME, password=original_password)
+        try:
+            rv = self.client.put(
+                "/api/v1/me/",
+                json={
+                    "password": new_password,
+                    "current_password": original_password,
+                },
+            )
+            assert rv.status_code == 200, rv.data
+
+            # The new password must actually work for login.
+            self.client.get("/logout/")
+            self.login(ADMIN_USERNAME, password=new_password)
+            rv = self.client.get(meUri)
+            assert rv.status_code == 200, rv.data
+        finally:
+            # Always restore the original password so subsequent tests keep
+            # working. Re-establish a session with whichever password is
+            # currently active before issuing the restore.
+            self.client.get("/logout/")
+            self.login(ADMIN_USERNAME, password=new_password)
+            rv = self.client.put(
+                "/api/v1/me/",
+                json={
+                    "password": original_password,
+                    "current_password": new_password,
+                },
+            )
+            if rv.status_code != 200:
+                # The password might still be the original (test failed before
+                # the change took effect). Re-login with the original to leave
+                # the admin user usable for downstream tests.
+                self.client.get("/logout/")
+                self.login(ADMIN_USERNAME, password=original_password)
+            assert rv.status_code == 200, rv.data
+
 
 class TestUserApi(SupersetTestCase):
     def test_avatar_with_invalid_user(self):
