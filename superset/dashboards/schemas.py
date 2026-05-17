@@ -98,13 +98,9 @@ openapi_spec_methods_override = {
 
 def validate_css(value: str) -> None:
     if re.search(r"<\s*/\s*style", value, re.IGNORECASE):
-        raise ValidationError(
-            "CSS must not contain style closing tags"
-        )
+        raise ValidationError("CSS must not contain style closing tags")
     if re.search(r"<\s*script", value, re.IGNORECASE):
-        raise ValidationError(
-            "CSS must not contain script tags"
-        )
+        raise ValidationError("CSS must not contain script tags")
 
 
 def validate_json(value: Union[bytes, bytearray, str]) -> None:
