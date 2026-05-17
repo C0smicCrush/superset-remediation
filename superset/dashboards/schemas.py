@@ -96,6 +96,17 @@ openapi_spec_methods_override = {
 }
 
 
+def validate_css(value: str) -> None:
+    if re.search(r"<\s*/\s*style", value, re.IGNORECASE):
+        raise ValidationError(
+            "CSS must not contain style closing tags"
+        )
+    if re.search(r"<\s*script", value, re.IGNORECASE):
+        raise ValidationError(
+            "CSS must not contain script tags"
+        )
+
+
 def validate_json(value: Union[bytes, bytearray, str]) -> None:
     try:
         json.validate_json(value)
@@ -360,7 +371,9 @@ class DashboardPostSchema(BaseDashboardSchema):
     position_json = fields.String(
         metadata={"description": position_json_description}, validate=validate_json
     )
-    css = fields.String(metadata={"description": css_description})
+    css = fields.String(
+        metadata={"description": css_description}, validate=validate_css
+    )
     theme_id = fields.Integer(
         metadata={"description": "Theme ID for the dashboard"}, allow_none=True
     )
@@ -386,7 +399,9 @@ class DashboardCopySchema(Schema):
         allow_none=True,
         validate=Length(0, 500),
     )
-    css = fields.String(metadata={"description": css_description})
+    css = fields.String(
+        metadata={"description": css_description}, validate=validate_css
+    )
     json_metadata = fields.String(
         metadata={"description": json_metadata_description},
         validate=validate_json_metadata,
@@ -421,7 +436,11 @@ class DashboardPutSchema(BaseDashboardSchema):
         allow_none=True,
         validate=validate_json,
     )
-    css = fields.String(metadata={"description": css_description}, allow_none=True)
+    css = fields.String(
+        metadata={"description": css_description},
+        allow_none=True,
+        validate=validate_css,
+    )
     theme_id = fields.Integer(
         metadata={"description": "Theme ID for the dashboard"}, allow_none=True
     )
