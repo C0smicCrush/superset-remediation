@@ -43,7 +43,7 @@ test('does not execute script tags injected via style breakout', () => {
   const payload = '</style><script>window.__xss=true</script><style>';
   const remove = injectCustomCss(payload);
 
-  expect((window as Record<string, unknown>).__xss).toBeUndefined();
+  expect((window as unknown as Record<string, unknown>).__xss).toBeUndefined();
 
   const scripts = document.head.querySelectorAll('script');
   expect(scripts.length).toBe(0);
